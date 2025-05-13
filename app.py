@@ -1,38 +1,42 @@
-from transformers import GPT2Tokenizer, GPT2LMHeadModel, TextDataset, DataCollatorForLanguageModeling, Trainer, TrainingArguments
+# app.py
+from flask import Flask, request, jsonify, render_template
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+import torch
 
-model_name = "aubmindlab/aragpt2-base"
+app = Flask(__name__)
+
+model_name = "./aragpt2-finetuned/checkpoint-12500"
 tokenizer = GPT2Tokenizer.from_pretrained(model_name)
 model = GPT2LMHeadModel.from_pretrained(model_name)
 
-def load_dataset(file_path, tokenizer, block_size=128):
-    return TextDataset(
-        tokenizer=tokenizer,
-        file_path=file_path,
-        block_size=block_size
-    )
+@app.route('/')
+def index():
+    return render_template("index.html")
 
-train_dataset = load_dataset("/home/doaa/programming/NLP/preprocessed_arwiki_for_autocomplete.txt", tokenizer)
+@app.route('/suggest', methods=['POST'])
+def suggest():
+    data = request.get_json()
+    input_text = data.get("input_text", "")
+    input_ids = tokenizer.encode(input_text, return_tensors='pt')
 
-data_collator = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer, mlm=False 
-)
+    with torch.no_grad():
+        outputs = model.generate(
+            input_ids,
+            max_length=len(input_ids[0]) + 10,
+            num_return_sequences=1,
+            do_sample=True,
+            top_k=50,
+            top_p=0.95,
+            temperature=0.9,
+            no_repeat_ngram_size=2,
+            pad_token_id=tokenizer.eos_token_id
+        )
 
-training_args = TrainingArguments(
-    output_dir="./aragpt2-finetuned",
-    overwrite_output_dir=True,
-    num_train_epochs=3,
-    per_device_train_batch_size=4,
-    save_steps=500,
-    save_total_limit=2,
-    logging_steps=100,
-    prediction_loss_only=True
-)
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    suggested_part = generated_text[len(input_text):].strip().split()
+    suggestions = list(dict.fromkeys(suggested_part))[:5]
 
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    data_collator=data_collator,
-    train_dataset=train_dataset
-)
+    return jsonify({"suggestions": suggestions})
 
-trainer.train()
+if __name__ == '__main__':
+    app.run(debug=True)
